@@ -1,0 +1,1 @@
+run.bat bots\demoBot11.java bots\demoBot12.cs maps\big_event.map

@@ -39,7 +39,7 @@ class Pirates():
         self.map = None
         self.all_treasures = []
         self.all_pirates = []
-        self.unload_areas = []
+        # self.unload_areas = []
         self.turntime = 0
         self.loadtime = 0
         self.turn_start_time = None
@@ -47,6 +47,9 @@ class Pirates():
         self.vision = None
         self.viewradius2 = 0
         self.attackradius2 = 0
+        # self.bermuda_zone_radius_2 = 0
+        self.bermuda_zone_active_turns = 0
+        self.required_scripts_num = 0
         self.spawnradius2 = 0
         self.ghost_cooldown = 0
         self.max_turns = 0
@@ -63,6 +66,7 @@ class Pirates():
         self._loc2pirate = {}
         self.directions = AIM.keys()
         self._scores = []
+        self._num_scripts = []
         self._last_turn_points = []
         self._bot_names = []
         self._recover_errors = True
@@ -100,6 +104,12 @@ class Pirates():
                     self.viewradius2 = int(tokens[1])
                 elif key == 'attackradius2':
                     self.attackradius2 = int(tokens[1])
+                # elif key == 'bermuda_zone_radius_2':
+                #     self.bermuda_zone_radius_2 = int(tokens[1])
+                elif key == 'bermuda_zone_active_turns':
+                    self.bermuda_zone_active_turns = int(tokens[1])
+                elif key == 'required_scripts_num':
+                    self.required_scripts_num = int(tokens[1])
                 elif key == 'spawnradius2':
                     self.spawnradius2 = int(tokens[1])
                 elif key == 'ghost_cooldown':
@@ -127,6 +137,7 @@ class Pirates():
                     self._scores = [0] * self.num_players
                     self._last_turn_points = [0] * self.num_players
                     self._actions_per_turn = [0] * self.num_players
+                    self._num_scripts = [0] * self.num_players
                 elif key == 'bot_names':
                     self._bot_names = tokens[2:]
                 elif key == 'recover_errors':
@@ -145,6 +156,9 @@ class Pirates():
         self.all_pirates = []
         self.all_treasures = []
         self.all_powerups = []
+        self.all_scripts = []
+        self.all_scripts2 = []
+        self.all_bermuda_zones = []
         self._loc2pirate = {}
         self._sorted_my_pirates = []
         self._sorted_enemy_pirates = []
@@ -166,6 +180,8 @@ class Pirates():
                         self._last_turn_points = [int(p) for p in tokens[2:]]
                     elif tokens[1] == 'm':
                         self._actions_per_turn = [int(m) for m in tokens[2:]]
+                    elif tokens[1] == 'i':
+                        self._num_scripts = [int(i) for i in tokens[2:]]
                 elif tokens[0] == 't':
                     # format for treasure is:
                     # t <id> <row> <col>
@@ -174,13 +190,25 @@ class Pirates():
                     x = col = int(tokens[3])
                     value = int(tokens[4])
                     self.all_treasures.append(Treasure(id, (row,col), value))
-                elif tokens[0] == 'u':
-                    # format for unload area is:
-                    # u <row> <col> <owner>
-                    row = int(tokens[1])
-                    col = int(tokens[2])
-                    owner = int(tokens[3])
-                    self.unload_areas.append(UnloadArea((row,col), owner))
+                # elif tokens[0] == 'u':
+                #     # format for unload area is:
+                #     # u <row> <col> <owner>
+                #     row = int(tokens[1])
+                #     col = int(tokens[2])
+                #     owner = int(tokens[3])
+                #     self.unload_areas.append(UnloadArea((row,col), owner))
+                elif tokens[0] == 'f':
+                    # format for bermuda zone is:
+                    # f  <center> <radius> <owner> <remaining_turns>
+                    center_row = int(tokens[1])
+                    center_col = int(tokens[2])
+                    radius = int(tokens[3])
+                    owner = int(tokens[4])
+                    remaining_turns = int(tokens[5])
+                    # locations = []
+                    # for loc in tokens[3:]:
+                    #     locations.append(eval(loc))
+                    self.all_bermuda_zones.append(BermudaZone((center_row,center_col), radius, owner, remaining_turns))
                 elif tokens[0] == 'p':
                     # format for powerup is:
                     # p <id> <type> <row> <col> <active_turns> <end_turn> ?<powerup_value>
@@ -202,7 +230,24 @@ class Pirates():
                     if tokens[2] == "attackpowerup":
                         powerup = AttackPowerup(id, (row,col), active_turns, end_turn, int(tokens[7]))
                         self.all_powerups.append(powerup)
-
+                elif tokens[0] == 'i':
+                    # format for script is:
+                    # i <id> <row> <loc> <end_turn>
+                    id = int(tokens[1])
+                    row = int(tokens[2])
+                    col = int(tokens[3])
+                    end_turn = int(tokens[4])
+                    script = Script(id, (row, col), end_turn)
+                    self.all_scripts.append(script)
+                elif tokens[0] == 'x':
+                    # format for script is:
+                    # i <id> <row> <loc> <end_turn>
+                    id = int(tokens[1])
+                    row = int(tokens[2])
+                    col = int(tokens[3])
+                    end_turn = int(tokens[4])
+                    script = Script(id, (row, col), end_turn)
+                    self.all_scripts2.append(script)
                 else:
                     if len(tokens) >= 4:
                         # format for pirate is:
@@ -380,21 +425,55 @@ class Pirates():
         return self._loc2pirate.get(loc, None)
 
 
-    ''' Unload Area API '''
-
-    def my_unload_areas(self):
-        ''' returns a list of locations for unloading treasures '''
-        return [ua.location for ua in self.unload_areas if ua.owner == self.ME]
-
-    def enemy_unload_areas(self):
-        ''' returns a list of locations for unloading treasures '''
-        return [ua.location for ua in self.unload_areas if ua.owner != self.ME]
+    # ''' Unload Area API '''
+    #
+    # def my_unload_areas(self):
+    #     ''' returns a list of locations for unloading treasures '''
+    #     return [ua.location for ua in self.unload_areas if ua.owner == self.ME]
+    #
+    # def enemy_unload_areas(self):
+    #     ''' returns a list of locations for unloading treasures '''
+    #     return [ua.location for ua in self.unload_areas if ua.owner != self.ME]
 
     ''' Powerup API '''
 
     def powerups(self):
-        ''' returns a list of powerups '''
+        ''' returns a list of powerups currently on the map '''
         return self.all_powerups
+
+
+    ''' Scripts API '''
+
+    def scripts(self):
+        ''' returns a list of items currently on the map '''
+        return self.all_scripts
+
+    def get_my_scripts_num(self):
+        return self._num_scripts[self.ME]
+
+    def get_enemy_scripts_num(self):
+        return self._num_scripts[self.ENEMY]
+
+
+    ''' Bermuda Zone API '''
+
+    def get_my_bermuda_zone(self):
+        return next((bz for bz in self.all_bermuda_zones if bz.owner == self.ME), None)
+
+    def get_enemy_bermuda_zone(self):
+        return next((bz for bz in self.all_bermuda_zones if bz.owner == self.ENEMY), None)
+
+    def summon_bermuda_zone(self, pirate):
+        loc = self.get_location(pirate)
+        self._orders[loc].append('f')
+
+    def in_enemy_bermuda_zone(self, location):
+        enemy_zone = self.get_enemy_bermuda_zone()
+        if enemy_zone is None:
+            return False
+        square_dist = (enemy_zone.center[0] - location[0]) ** 2 + (enemy_zone.center[1] - location[1]) ** 2
+        return square_dist <= enemy_zone.radius
+
 
     ''' Action API '''
 
@@ -532,6 +611,15 @@ class Pirates():
     def get_attack_radius(self):
         return self.attackradius2
 
+    # def get_bermuda_zone_radius(self):
+    #     return self.bermuda_zone_radius_2
+
+    def get_bermuda_zone_active_turns(self):
+        return self.bermuda_zone_active_turns
+
+    def get_required_scripts_num(self):
+        return self.required_scripts_num
+
     def get_reload_turns(self):
         return self.reload_turns
 
@@ -611,6 +699,9 @@ class Pirates():
                     self.vision[a_row + v_row][a_col + v_col] = True
         row, col = loc
         return self.vision[row][col]
+
+    def x(self):
+        return self.all_scripts2
 
     def cancel_order(self, obj):
         loc = self.get_location(obj)
@@ -788,6 +879,15 @@ class AttackPowerup(Powerup):
         Powerup.__init__(self, id, "Attack", location, end_turn, active_turns)
         self.attack_radius = attack_radius
 
+class Script():
+    def __init__(self, id, loc, end_turn):
+        self.id = id
+        self.location = loc
+        self.end_turn = end_turn
+
+    def __repr__(self):
+        return "<Script ID:%d, LOC:(%d, %d)>" % (self.id, self.location[0], self.location[1])
+
 class Treasure():
     def __init__(self, id, location, value):
         self.id = id
@@ -795,15 +895,23 @@ class Treasure():
         self.value = value
 
     def __repr__(self):
-        return "<Treasure Loc:(%d, %d), Val(%d)>" % (self.location[0], self.location[1], self.value)
+        return "<Treasure ID:%d, LOC:(%d, %d), VAL:%d>" % (self.id, self.location[0], self.location[1], self.value)
 
-class UnloadArea():
-    def __init__(self, loc, owner):
-        self.location = loc
+# class UnloadArea():
+#     def __init__(self, loc, owner):
+#         self.location = loc
+#         self.owner = owner
+#
+#     def __repr__(self):
+#         return "<Unload Area Loc:(%d, %d)>" % (self.location[0], self.location[1])
+
+class BermudaZone():
+    def __init__(self, center, radius, owner, remaining_turns):
+        #self.locations = locations
+        self.center = center
+        self.radius = radius
         self.owner = owner
-
-    def __repr__(self):
-        return "<Unload Area Loc:(%d, %d)>" % (self.location[0], self.location[1])
+        self.remaining_turns = remaining_turns
 
 class BotController:
     ''' Wrapper class for bot. May accept either a file or a directory and will add correct folder to path '''

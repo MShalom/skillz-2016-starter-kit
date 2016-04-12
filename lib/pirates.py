@@ -39,7 +39,8 @@ AIM = {'n': (-1, 0),
        's': (1, 0),
        'w': (0, -1),
        'a': (0, 0),
-       'd': (0, 0)}
+       'd': (0, 0),
+       'f': (0, 0)}
 
 # precalculated sqrt
 SQRT = [int(sqrt(r)) for r in range(101)]
@@ -64,6 +65,9 @@ class Pirates(Game):
         self.viewradius = int(options['viewradius2'])
         self.fogofwar = options.get('fogofwar')
         self.attack_radius = int(options['attackradius2'])
+        self.bermuda_zone_radius = int(options['bermuda_zone_radius_2'])
+        self.required_scripts_num = int(options['required_scripts_num'])
+        self.bermuda_zone_active_turns = int(options['bermuda_zone_active_turns'])
         self.engine_seed = options.get('engine_seed', randint(-MAX_RAND-1, MAX_RAND))
         seed(self.engine_seed)
         self.player_seed = options.get('player_seed', randint(-MAX_RAND-1, MAX_RAND))
@@ -110,6 +114,8 @@ class Pirates(Game):
         self.treasures = []
         self.unload_areas = []
         self.powerups = []
+        self.scripts = []
+        self.anti_scripts = []
         self.zones = dict([(player, []) for player in range(self.num_players)])
         self.lighthouses = set(map_data['lighthouses'])
         self.enemy_zones = dict([(player, []) for player in range(self.num_players)])
@@ -163,17 +169,20 @@ class Pirates(Game):
         # move powerup
         self.moves_per_player = [self.actions_per_turn]*self.num_players
 
+        # initialize scripts
+        for id, script_data in enumerate(map_data['scripts']):
+            script = Script(id, (script_data[0], script_data[1]), script_data[2], script_data[3])
+            self.scripts.append(script)
+
+        # initialize anti_scripts
+        for id, anti_script_data in enumerate(map_data['anti_scripts']):
+            anti_script = Script(id, (anti_script_data[0], anti_script_data[1]), anti_script_data[2], anti_script_data[3])
+            self.anti_scripts.append(anti_script)
 
         # initialize pirates
         for player, player_pirates in map_data['pirates'].items():
             for id,pirate_loc in enumerate(player_pirates):
                 self.add_initial_pirate(pirate_loc, player, id)
-
-        # initialize unload areas
-        for player, player_unload_areas in map_data['unload_areas'].items():
-            for unload_area_loc in player_unload_areas:
-                unload_area = UnloadArea(unload_area_loc, player)
-                self.unload_areas.append(unload_area)
 
         # initialize zones and create enemy_zone lists
         self.zones[0] = []
@@ -217,6 +226,11 @@ class Pirates(Game):
         # the engine may kill players before the game starts and this is needed to prevent errors
         self.orders = [[] for i in range(self.num_players)]
 
+        # how many scripts does each player currently have
+        self.num_scripts = [0]*self.num_players
+
+        self.bermuda_zones = []
+
 
     def distance(self, a_loc, b_loc):
         """ Returns distance between x and y squared """
@@ -245,6 +259,8 @@ class Pirates(Game):
         num_players = None
         params = {}
         powerups = []
+        scripts = []
+        anti_scripts = []
 
         for line in map_text.split('\n'):
             line = line.strip()
@@ -309,6 +325,14 @@ class Pirates(Game):
                 powerup = value.split()
                 powerup = [powerup[0]] + map(int, powerup[1:])
                 powerups.append(powerup)
+            elif key == 'script':
+                script = value.split()
+                script = map(int, script)
+                scripts.append(script)
+            elif key == 'anti_script':
+                anti_script = value.split()
+                anti_script = map(int, anti_script)
+                anti_scripts.append(anti_script)
             else:
                 # default collect all other parameters
                 params[key] = value
@@ -327,6 +351,8 @@ class Pirates(Game):
             'num_players':  num_players,
             'treasures':    treasures,
             'powerups':     powerups,
+            'scripts':      scripts,
+            'anti_scripts': anti_scripts,
             'lighthouses':  lighthouses,
             'pirates':      pirates,
             'unload_areas': unload_areas,
@@ -493,7 +519,7 @@ class Pirates(Game):
             Water which is seen for the first time is included.
             All visible transient objects (pirates, food) are included.
         """
-        updates = self.get_state_changes()
+        updates = self.get_state_changes(player)
         v = self.vision[player]
         visible_updates = []
         # first add unseen water
@@ -502,10 +528,9 @@ class Pirates(Game):
 
         # next list all transient objects
         for update in updates:
-            if update[0] == 't' or update[0] == 'u':
+            if update[0] == 't' or update[0] == 'u' or update[0] == 'f':
                 visible_updates.append(update)
                 continue
-            
             ilk, id, row, col, owner = update[0:5]
 
             # only include updates to squares which are (visible) or (where a player ant just died) or (a fort)
@@ -519,22 +544,21 @@ class Pirates(Game):
                     if ilk is 'a' and not owner == player and update[7] == int(True):
                         update[2] = update[3] = -1
                     update[4] = self.switch[player][owner]
-
         visible_updates.append(['g','s'] + self.order_for_player(player, self.score))
         visible_updates.append(['g','c'] + self.order_for_player(player, self.ghost_cooldowns))
         visible_updates.append(['g','p'] + self.order_for_player(player, self.get_last_turn_points()))
         visible_updates.append(['g','m'] + self.order_for_player(player, self.moves_per_player))
+        visible_updates.append(['g','i'] + self.order_for_player(player, self.num_scripts))
         visible_updates.append([]) # newline
         return '\n'.join(' '.join(map(str,s)) for s in visible_updates)
 
 
-    def get_state_changes(self):
+    def get_state_changes(self, player):
         """ Return a list of all transient objects on the map.
 
             Food, living pirates, pirates killed this turn
             Changes are sorted so that the same state will result in the same output
         """
-
         changes = []
         changes.extend(sorted(
             ['t', treasure.id, treasure.initial_loc[0], treasure.initial_loc[1], treasure.value]
@@ -569,6 +593,24 @@ class Pirates(Game):
             for pup in self.powerups if self.turn >= pup.start_turn and self.turn < pup.end_turn
         ))
 
+        # scripts
+        changes.extend(sorted(
+            ['i', s.id, s.location[0], s.location[1], s.end_turn]
+            for s in self.scripts if self.turn >= s.start_turn and self.turn < s.end_turn
+        ))
+
+        # anti_scripts
+        changes.extend(sorted(
+            ['x', s.id, s.location[0], s.location[1], s.end_turn]
+            for s in self.anti_scripts if self.turn >= s.start_turn and self.turn < s.end_turn
+        ))
+
+        # bermuda zones
+        changes.extend(sorted(
+            ['f', bz.center[0], bz.center[1], bz.radius, self.order_for_player(player, [bz.owner, 1-bz.owner])[0], bz.active_turns]
+            # + [str(loc).replace(' ','') for loc in bz.locations]
+            for bz in self.bermuda_zones if bz.active_turns > 0
+        ))
         return changes
 
     def get_zone_locations(self, mode, params):
@@ -684,31 +726,12 @@ class Pirates(Game):
                 invalid.append((line,'invalid row or col'))
                 continue
 
-            # if not self.correct_attack_parse(player, directions):
-            #     invalid.append((line,'invalid attack command'))
-            #     continue
-
-            if 'a' not in directions and 'd' not in directions and any(d not in AIM for d in directions):
+            if 'a' not in directions and 'd' not in directions and 'f' not in directions and any(d not in AIM for d in directions):
                 invalid.append((line,'invalid directions'))
                 continue
 
             # check that attack order is the last order for a pirate
-            only_direction_letters = [d for d in directions if d in AIM and d != 'a' and d != 'd']
-            # attack_first_occurrence = ''.join(only_direction_letters).find('a')
-            # if attack_first_occurrence != -1 and attack_first_occurrence != len(only_direction_letters)-1:
-            #
-            #     invalid.append((line,'invalid directions - attack not last order'))
-            #     continue
-
-            # check that defense order is the last order for a pirate
-            # defend_first_occurrence = ''.join(only_direction_letters).find('d')
-            # if defend_first_occurrence != -1 and defend_first_occurrence != len(only_direction_letters)-1:
-            # # if directions.find('d') != -1 and len(directions) > 1:
-            #
-            #     invalid.append((line,'invalid directions - defend not last order'))
-            #     continue
-
-            # count total directions of player's pirates
+            only_direction_letters = [d for d in directions if d in AIM and d != 'a' and d != 'd' and d != 'f']
 
             action_counter += len(only_direction_letters) # only movement!
 
@@ -726,6 +749,34 @@ class Pirates(Game):
             valid.append(line)
 
         return orders, valid, ignored, invalid
+
+
+    def in_circle(self, center, radius2, loc):
+        square_dist = (center[0] - loc[0]) ** 2 + (center[1] - loc[1]) ** 2
+        return square_dist <= radius2
+
+    def initial_loc_in_circle(self, center, player):
+        for p in [pir for pir in self.all_pirates if pir.owner != player]:
+            if self.in_circle(center, self.bermuda_zone_radius, p.initial_loc):
+                return True
+        return False
+
+
+    def summon_bermuda_zone(self, pirate):
+        bz = BermudaZone(pirate.owner, self.bermuda_zone_active_turns, self.turn, pirate.loc, self.bermuda_zone_radius)
+        # import math
+        # radius = int(math.sqrt(self.bermuda_zone_radius))
+        # for row in range(pirate.loc[0] - radius, pirate.loc[0] + radius):
+        #     if row < 0 or row >= self.height:
+        #         continue
+        #     for col in range(pirate.loc[1] - radius, pirate.loc[1] + radius):
+        #         if col < 0 or col >= self.width:
+        #             continue
+        #         if self.in_circle(pirate.loc, self.bermuda_zone_radius, (row,col)):
+        #             bz.locations.append((row,col))
+        self.bermuda_zones.append(bz)
+        self.num_scripts[pirate.owner] = 0
+
 
     def correct_attack_parse(self, player, directions):
         i = 1
@@ -752,6 +803,7 @@ class Pirates(Game):
         valid = []
         valid_orders = []
         seen_locations = set()
+        bermuda_summon_count = 0
 
         # each line refers to a single pirate ship
         # each pirate ship may move to more than 1 direction, and may attack at the end
@@ -774,18 +826,21 @@ class Pirates(Game):
 
             p = self.current_pirates[loc]
 
-            # validate that attack or defense are standalone
+            # validate that attack or defense or bermuda zone activation are standalone
             only_actions_letters = ''.join([d for d in directions if d in AIM])
             if 'a' in only_actions_letters and len(only_actions_letters) > 1:
-                invalid.append((line, 'Attacking ship cannot defend, move or attack more than once in the same turn'))
+                invalid.append((line, 'Attacking ship cannot defend, move, summon bermuda zone or attack more than once in the same turn'))
                 continue
             if 'd' in only_actions_letters:
                 #d = datetime.date(year=2016, month=03, day=22)
                 #if datetime.datetime.now().date() < d:
                 #    raise Exception('Not supported')
                 if len(only_actions_letters) > 1:
-                    invalid.append((line, 'Defending ship cannot attack, move or defend more than once in the same turn'))
+                    invalid.append((line, 'Defending ship cannot attack, move, summon bermuda zone or defend more than once in the same turn'))
                     continue
+            if 'f' in only_actions_letters and len(only_actions_letters) > 1:
+                invalid.append((line, 'Bermuda zone summoner cannot defend, move, attack or summon bermuda zone more than once in the same turn'))
+                continue
 
             #validate that ship cannot attack if it's reloading
             if 'a' in only_actions_letters and self.current_pirates[loc].reload_turns > 0:
@@ -795,6 +850,18 @@ class Pirates(Game):
             #validate that ship cannot defend if it's reloading
             if 'd' in only_actions_letters and self.current_pirates[loc].defense_reload_turns > 0:
                 ignored.append((line, 'Defense ignored - pirate ship is reloading'))
+                continue
+
+            if 'f' in only_actions_letters and self.initial_loc_in_circle(p.loc, player):
+                invalid.append((line, 'Bermuda zone cannot overlap enemy initial locations'))
+                continue
+
+            if 'f' in only_actions_letters and self.num_scripts[player] < self.required_scripts_num:
+                invalid.append((line, 'Not enough scripts to summon bermuda zone'))
+                continue
+
+            if 'f' in only_actions_letters and player in [bz.owner for bz in self.bermuda_zones if bz.active_turns > 0]:
+                invalid.append((line, 'Bermuda zone already activated'))
                 continue
 
             if p.treasure is not None and len(only_direction_letters) > p.carry_treasure_speed:
@@ -811,6 +878,15 @@ class Pirates(Game):
 
             if self.check_simulated_pirate_move(loc, only_direction_letters, player, ignored, line) is False:
                 continue
+
+            if 'f' in only_actions_letters:
+                bermuda_summon_count += 1
+
+            if bermuda_summon_count > 1:
+                invalid.append((line, 'more than 1 pirate attempted to summon bermuda zone'))
+                valid_orders = []
+                valid = []
+                break
 
             # this order is valid!
             valid_orders.append((loc, directions, order_args))
@@ -885,6 +961,12 @@ class Pirates(Game):
                         # pirate is defending this turn
                         pirate.defense_expiration_turns_counter = pirate.defense_expiration_turns
                         # pirate.is_defensive = True
+
+                    # added bermuda zone ability
+                    if d == 'f':
+                        self.summon_bermuda_zone(pirate)
+
+
             pirate.loc = new_loc
             pirate.orders.append(direction)
             next_loc[pirate.loc].append(pirate)
@@ -927,6 +1009,28 @@ class Pirates(Game):
             if p.defense_expiration_turns_counter > 0:
                 p.defense_expiration_turns_counter -= 1
 
+    def do_bermuda_effect(self):
+        #kill all pirates who are in a bermuda zone of the opposing team
+        to_kill = []
+        for pirate in self.current_pirates.values():
+            enemy_bermuda_zone_list = [bz for bz in self.bermuda_zones if bz.owner != pirate.owner and bz.active_turns > 0]
+            for ebz in enemy_bermuda_zone_list:
+                if self.in_circle(ebz.center, ebz.radius, pirate.loc):
+                    to_kill.append(pirate)
+                    break #continue to next pirate
+
+            # enemy_bermuda_zone_list = [bz.locations for bz in self.bermuda_zones if bz.owner != pirate.owner and bz.active_turns > 0]
+            # enemy_bermuda_zone_locations = [item for sublist in enemy_bermuda_zone_list for item in sublist]
+            # if pirate.loc in enemy_bermuda_zone_locations:
+            #     to_kill.append(pirate)
+        for p in to_kill:
+            self.kill_pirate(p)
+            p.reason_of_death = 'b'
+
+        #update remaining turns of bermuda zone
+        for bz in self.bermuda_zones:
+            if bz.active_turns > 0:
+                bz.active_turns -= 1
 
     def do_sober(self):
         # handles the drunk pirates
@@ -1331,6 +1435,23 @@ class Pirates(Game):
                 powerup.end_turn = self.turn
                 powerup.activate(p, self)
 
+    def do_scripts(self):
+        """ Calculates script logic
+        """
+        available_scripts = [s for s in self.scripts if self.turn >= s.start_turn and self.turn < s.end_turn]
+        available_anti_scripts = [s for s in self.anti_scripts if self.turn >= s.start_turn and self.turn < s.end_turn]
+        for p in self.current_pirates.values():
+            # check if pirate is standing on a script
+            script = next((s for s in available_scripts if p.loc == s.location), None)
+            if script:
+                script.end_turn = self.turn
+                self.num_scripts[p.owner] += 1
+
+            anti_script = next((s for s in available_anti_scripts if p.loc == s.location), None)
+            if anti_script:
+                anti_script.end_turn = self.turn
+                if self.num_scripts[p.owner] > 0:
+                    self.num_scripts[p.owner] -= 1
 
     def get_physical_pirates(self):
         return filter(lambda pirate: not pirate.is_cloaked, self.current_pirates.values())
@@ -1452,8 +1573,10 @@ class Pirates(Game):
         self.do_sober() #handles drunk history and removes drunk pirates who are sober
         self.do_attack() #handles attacking pirates
         self.do_defense() #handles defending pirates
+        self.do_bermuda_effect() #kills all pirates in bermuda zone if they dont belong to the player who summoned it, and updates bermuda zone counter
         self.do_treasures() #handles treasure - collecting and unloading
         self.do_powerups() #handles powerups
+        self.do_scripts() #handles scripts
         self.do_spawn() #spawns new pirates
 
 
@@ -1503,6 +1626,9 @@ class Pirates(Game):
         result.append(['max_turns', self.max_turns])
         result.append(['viewradius2', self.viewradius])
         result.append(['attackradius2', self.attack_radius])
+        result.append(['bermuda_zone_radius_2', self.bermuda_zone_radius])
+        result.append(['bermuda_zone_active_turns', self.bermuda_zone_active_turns])
+        result.append(['required_scripts_num', self.required_scripts_num])
         result.append(['player_seed', self.player_seed])
         # send whether map is cyclic or not
         result.append(['cyclic', int(self.cyclic)])
@@ -1619,6 +1745,9 @@ class Pirates(Game):
         replay['turns'] = self.max_turns
         replay['viewradius2'] = self.viewradius
         replay['attackradius2'] = self.attack_radius
+        replay['bermuda_zone_radius_2'] = self.bermuda_zone_radius
+        replay['bermuda_zone_active_turns'] = self.bermuda_zone_active_turns
+        replay['required_scripts_num'] = self.required_scripts_num
         replay['maxpoints'] = self.maxpoints
         replay['actions_per_turn'] = self.actions_per_turn
         replay['reload_turns'] = self.reload_turns
@@ -1669,12 +1798,24 @@ class Pirates(Game):
         replay['forts'] = []
         replay['treasures'] = []
         replay['powerups'] = []
+        replay['scripts'] = []
+        replay['scripts2'] = []
+        replay['bermuda_zones'] = []
 
         for treasure in self.treasures:
             replay['treasures'].append([treasure.id, treasure.initial_loc, treasure.value, ''.join(['1' if i else '0' for i in treasure.is_available_history])])
 
         for powerup in self.powerups:
             replay['powerups'].append([powerup.id, powerup.__class__.__name__, powerup.location, powerup.start_turn, powerup.end_turn])
+
+        for script in self.scripts:
+            replay['scripts'].append([script.id, script.location, script.start_turn, script.end_turn])
+
+        for anti_script in self.anti_scripts:
+            replay['scripts2'].append([anti_script.id, anti_script.location, anti_script.start_turn, anti_script.end_turn])
+
+        for bz in self.bermuda_zones:
+            replay['bermuda_zones'].append([bz.owner, bz.center, bz.start_turn])
 
         replay['zones'] = self.zones.values()
         replay['rejected'] = self.rejected_moves
@@ -1785,6 +1926,14 @@ class SpeedPowerup(Powerup):
     def get_value(self):
         return self.carry_treasure_speed
 
+class Script:
+    # Script class
+    def __init__(self, id, loc, start_turn, end_turn):
+        self.id = id
+        self.location = loc
+        self.start_turn = start_turn
+        self.end_turn = end_turn
+
 
 class Treasure:
     # Treasure class
@@ -1808,11 +1957,19 @@ class Treasure:
         return '(%s, %s)' % (self.initial_loc)
 
 
-class UnloadArea:
-    def __init__(self, loc, owner):
-        self.loc = loc
-        self.owner = owner
+# class UnloadArea:
+#     def __init__(self, loc, owner):
+#         self.loc = loc
+#         self.owner = owner
 
+class BermudaZone:
+    def __init__(self, owner, active_turns, start_turn, center, radius):
+        # self.locations = []
+        self.owner = owner
+        self.active_turns = active_turns
+        self.start_turn = start_turn
+        self.center = center
+        self.radius = radius
 
 class Pirate:
     def __init__(self, loc, owner, id, attack_radius, defense_expiration_turns, spawn_turn=None):

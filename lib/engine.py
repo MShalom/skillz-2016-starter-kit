@@ -202,6 +202,9 @@ def run_game(game, botcmds, options):
             else:
                 time_limit = turntime
 
+            # here is our safe zone, we take factor of 3 for our running more than we show to players
+            time_limit *= 3
+
             if is_serial:
                 simul_num = 1
             else:

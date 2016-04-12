@@ -207,6 +207,15 @@ def main(argv):
     game_group.add_option("--attackradius2", dest="attackradius2",
                           default=def_opts['attackradius2'], type="int",
                           help="Attack radius of pirate ships squared")
+    game_group.add_option("--bermuda_zone_radius_2", dest="bermuda_zone_radius_2",
+                          default=def_opts['bermuda_zone_radius_2'], type="int",
+                          help="Bermuda zone radius squared")
+    game_group.add_option("--bermuda_zone_active_turns", dest="bermuda_zone_active_turns",
+                          default=def_opts['bermuda_zone_active_turns'], type="int",
+                          help="Number of turns for bermuda zone to be on")
+    game_group.add_option("--required_scripts_num", dest="required_scripts_num",
+                          default=def_opts['required_scripts_num'], type="int",
+                          help="Number of needed scripts to summon bermuda zone")
     game_group.add_option("--maxpoints", dest="maxpoints",
                           default=def_opts['maxpoints'], type="int",
                           help="Points to reach to end game")
@@ -377,6 +386,9 @@ def run_rounds(opts,args):
         "attack": opts.attack,
         "viewradius2": opts.viewradius2,
         "attackradius2": opts.attackradius2,
+        "bermuda_zone_radius_2": opts.bermuda_zone_radius_2,
+        "bermuda_zone_active_turns": opts.bermuda_zone_active_turns,
+        "required_scripts_num": opts.required_scripts_num,
         "loadtime": opts.loadtime,
         "turntime": opts.turntime,
         "recover_errors": opts.recover_errors,
